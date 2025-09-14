@@ -234,6 +234,27 @@ class InteractiveUI:
             if package_json.exists():
                 print(f"Project directory: {parent_dir}")
         
+        # Show if it's a Rust target directory
+        elif path.name == "target":
+            print("Type: Rust compilation artifacts")
+            
+            # Try to find Cargo.toml in parent directory
+            parent_dir = path.parent
+            cargo_toml = parent_dir / "Cargo.toml"
+            if cargo_toml.exists():
+                print(f"Rust project directory: {parent_dir}")
+                
+                # Try to read project name from Cargo.toml
+                try:
+                    with open(cargo_toml, 'r') as f:
+                        for line in f:
+                            if line.strip().startswith('name = '):
+                                project_name = line.split('=')[1].strip().strip('"\'')
+                                print(f"Project name: {project_name}")
+                                break
+                except (IOError, OSError):
+                    pass
+        
         print("\nPress any key to return to menu...")
         self.get_key()
 
@@ -388,8 +409,9 @@ class CacheCleaner:
         # Safe external cache patterns
         safe_patterns = [
             "/.npm", "/.yarn", "/.cache", "/.composer", "/.gradle/caches",
-            "/.m2/repository/.cache", "/.cargo/registry/cache", "/homebrew",
-            "/go/pkg/mod/cache", "/cocoapods", "/node_modules"
+            "/.m2/repository/.cache", "/.cargo/registry/cache", "/.cargo/registry/src", 
+            "/.cargo/git/db", "/homebrew", "/go/pkg/mod/cache", "/cocoapods", 
+            "/node_modules", "/target"
         ]
         
         # Check if path matches safe patterns
@@ -415,7 +437,7 @@ class CacheCleaner:
         
         print("🔍 Scanning for cache directories...")
         print(f"   Looking for directories >= {self.min_size_mb}MB")
-        print("   Scanning ~/Library/, npm, Homebrew caches, and old node_modules...")
+        print("   Scanning ~/Library/, npm, Homebrew caches, old node_modules, and Rust targets...")
         print("   This may take a few minutes...\n")
         
         # Scan standard Library cache paths
@@ -454,6 +476,9 @@ class CacheCleaner:
         
         # Check for old node_modules directories in user projects
         self._scan_node_modules(cache_dirs)
+        
+        # Check for Rust target directories in user projects
+        self._scan_rust_targets(cache_dirs)
         
         return sorted(cache_dirs, key=lambda x: x[1], reverse=True)
 
@@ -523,8 +548,10 @@ class CacheCleaner:
                 # Maven cache
                 self.home_dir / ".m2/repository/.cache",
                 
-                # Rust cargo cache
+                # Rust cargo caches (global)
                 self.home_dir / ".cargo/registry/cache",
+                self.home_dir / ".cargo/registry/src",
+                self.home_dir / ".cargo/git/db",
                 
                 # Go module cache
                 self.home_dir / "go/pkg/mod/cache" if (self.home_dir / "go/pkg/mod/cache").exists() else None,
@@ -536,6 +563,93 @@ class CacheCleaner:
                     
         except (PermissionError, OSError):
             pass
+
+    def _scan_rust_targets(self, cache_dirs: List[Tuple[Path, int]]):
+        """Scan for Rust target directories in user projects that are at least 1 day old"""
+        try:
+            print("   Scanning for old Rust target directories...")
+            
+            # Same development directories as node_modules scanning
+            dev_directories = [
+                self.home_dir / "Development",
+                self.home_dir / "Projects", 
+                self.home_dir / "Code",
+                self.home_dir / "dev",
+                self.home_dir / "projects",
+                self.home_dir / "workspace",
+                self.home_dir / "Documents" / "Projects",
+                self.home_dir / "Documents" / "Development",
+                self.home_dir / "Desktop",
+            ]
+            
+            current_time = time.time()
+            one_day_seconds = 24 * 60 * 60
+            
+            for dev_dir in dev_directories:
+                if dev_dir.exists() and dev_dir.is_dir():
+                    self._scan_directory_for_rust_targets(dev_dir, cache_dirs, current_time, one_day_seconds)
+                    
+        except (PermissionError, OSError):
+            pass
+
+    def _scan_directory_for_rust_targets(self, directory: Path, cache_dirs: List[Tuple[Path, int]], current_time: float, one_day_seconds: int, max_depth: int = 4):
+        """Recursively scan directory for Rust target directories, with depth limit"""
+        if max_depth <= 0:
+            return
+            
+        try:
+            for item in directory.iterdir():
+                if not item.is_dir():
+                    continue
+                    
+                # Skip hidden directories and common non-project directories
+                if item.name.startswith('.') or item.name in ['target', 'node_modules', 'dist', 'build', '__pycache__']:
+                    continue
+                
+                # Check if this directory contains a Rust target directory
+                target_path = item / "target"
+                if target_path.exists() and target_path.is_dir():
+                    # Verify it's actually a Rust project by checking for Cargo.toml
+                    cargo_toml = item / "Cargo.toml"
+                    if cargo_toml.exists():
+                        # Check if target directory is old enough (at least 1 day)
+                        if self._is_rust_target_old_enough(target_path, current_time, one_day_seconds):
+                            self._check_and_add_external_cache_dir(target_path, cache_dirs, "Rust target")
+                
+                # Recursively scan subdirectories (but not too deep)
+                if max_depth > 1:
+                    self._scan_directory_for_rust_targets(item, cache_dirs, current_time, one_day_seconds, max_depth - 1)
+                    
+        except (PermissionError, OSError):
+            pass
+
+    def _is_rust_target_old_enough(self, target_path: Path, current_time: float, one_day_seconds: int) -> bool:
+        """Check if Rust target directory hasn't been modified in at least 1 day"""
+        try:
+            # Check the modification time of the target directory itself
+            dir_mtime = target_path.stat().st_mtime
+            
+            # Also check key subdirectories that indicate recent compilation activity
+            key_paths = [
+                target_path / "debug",
+                target_path / "release", 
+                target_path / ".rustc_info.json",
+                target_path / "CACHEDIR.TAG"
+            ]
+            
+            latest_mtime = dir_mtime
+            for key_path in key_paths:
+                if key_path.exists():
+                    key_mtime = key_path.stat().st_mtime
+                    latest_mtime = max(latest_mtime, key_mtime)
+            
+            # Check if it's been at least 1 day since last modification
+            age_seconds = current_time - latest_mtime
+            return age_seconds >= one_day_seconds
+            
+        except (OSError, IOError):
+            # If we can't determine the age, err on the side of caution
+            return False
 
     def _scan_node_modules(self, cache_dirs: List[Tuple[Path, int]]):
         """Scan for node_modules directories in user projects that are at least 1 day old"""
@@ -818,8 +932,8 @@ class CacheCleaner:
         print("Safely identifies and removes large cache directories from:")
         print("• ~/Library/ (system and app caches)")
         print("• 3rd party apps (Unity, Chrome, VS Code, etc.)")
-        print("• Development tools (npm, Homebrew, pip, etc.)")
-        print("• Old node_modules in projects (1+ day old only)")
+        print("• Development tools (npm, Homebrew, pip, Cargo, etc.)")
+        print("• Old project builds (node_modules, Rust target dirs - 1+ day old only)")
         print("System-critical files are automatically protected.\n")
         
         print("Choose interface mode:")

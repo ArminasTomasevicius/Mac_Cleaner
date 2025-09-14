@@ -12,7 +12,7 @@ A powerful, safe, and user-friendly utility to identify and clean large cache di
 ✅ **Classic Mode**: Traditional numbered selection interface  
 ✅ **Safe Operation**: Automatically protects system-critical directories  
 ✅ **Smart Detection**: Finds caches ≥ 100MB across system and projects  
-✅ **node_modules Cleanup**: Safely removes old project dependencies (1+ day old)  
+✅ **Project Cleanup**: Safely removes old build artifacts (node_modules, Rust targets - 1+ day old)  
 ✅ **Real-time Updates**: See space freed immediately in interactive mode  
 ✅ **Full Path Display**: Verify exactly what will be deleted  
 ✅ **No External Dependencies**: Uses only Python standard library  
@@ -44,8 +44,10 @@ A powerful, safe, and user-friendly utility to identify and clean large cache di
 - Rust Cargo, Go module caches
 
 **Project Dependencies:**
-- `node_modules` directories in user projects
-- **Safety**: Only targets `node_modules` that haven't been modified in 1+ days
+- `node_modules` directories in Node.js projects
+- `target` directories in Rust projects (compilation artifacts)
+- **Safety**: Only targets build directories that haven't been modified in 1+ days
+- **Smart Detection**: Verifies projects by checking for `package.json` / `Cargo.toml`
 - Scans common development folders: `~/Development`, `~/Projects`, `~/Code`, `~/Desktop`, etc.
 
 ## What It Protects
@@ -175,7 +177,7 @@ Type 'DELETE' (in capitals) to proceed, or anything else to cancel: DELETE
 - **System protection**: Hardcoded blacklist of critical system directories
 - **Manual confirmation**: Requires explicit user action for each deletion
 - **No system files**: Cannot access or modify system-level directories
-- **Time-based protection**: `node_modules` must be 1+ days old to be considered for deletion
+- **Time-based protection**: Build directories (`node_modules`, `target`) must be 1+ days old to be considered for deletion
 - **Conservative approach**: When in doubt, the cleaner won't delete
 - **Error handling**: Gracefully handles permission errors and missing files
 
